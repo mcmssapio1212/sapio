@@ -1,0 +1,483 @@
+--[[
+  CASTRO EGG FINDER PRO — DIAGNOSTICO v0.2
+  Autor: projeto Marcos Sapio
+
+  Procura candidatos a ovos somente nos objetos ja replicados para a
+  partida atual. Usa APIs padrao de Luau / Roblox.
+  Nao consulta outros servidores, nao faz auto-steal, nao envia dados,
+  nao contorna protecoes e nao comprova a identidade de cada candidato.
+  Use apenas em experiencias onde voce tem permissao para executar scripts.
+]]
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local player = Players.LocalPlayer
+if not player then
+    warn("[Castro Finder] Execute em um cliente de jogo, nao no servidor.")
+    return
+end
+
+local playerGui = player:WaitForChild("PlayerGui", 10)
+if not playerGui then
+    warn("[Castro Finder] PlayerGui nao disponivel.")
+    return
+end
+
+local previous = playerGui:FindFirstChild("CastroEggFinderDiag")
+if previous then
+    previous:Destroy()
+end
+
+local GUI_NAME = "CastroEggFinderDiag"
+local MAX_SCAN = 15000
+local MAX_RESULTS = 40
+local INTERVAL = 12
+local COLOR_BG = Color3.fromRGB(21, 23, 32)
+local COLOR_PANEL = Color3.fromRGB(35, 39, 53)
+local COLOR_ORANGE = Color3.fromRGB(255, 158, 44)
+local COLOR_TEXT = Color3.fromRGB(245, 245, 248)
+local COLOR_SUB = Color3.fromRGB(173, 182, 201)
+local COLOR_GREEN = Color3.fromRGB(77, 223, 100)
+local COLOR_BLUE = Color3.fromRGB(39, 133, 207)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = GUI_NAME
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = playerGui
+
+local function make(className, parent, props)
+    local obj = Instance.new(className)
+    for key, value in pairs(props or {}) do
+        obj[key] = value
+    end
+    obj.Parent = parent
+    return obj
+end
+
+local frame = make("Frame", gui, {
+    Size = UDim2.fromOffset(455, 570),
+    AnchorPoint = Vector2.new(1, 0.5),
+    Position = UDim2.new(1, -8, 0.5, 0),
+    BackgroundColor3 = COLOR_BG,
+    BorderSizePixel = 0,
+    Active = true
+})
+make("UICorner", frame, {CornerRadius = UDim.new(0, 10)})
+make("UIStroke", frame, {Color = COLOR_ORANGE, Thickness = 2})
+
+local header = make("Frame", frame, {
+    Size = UDim2.new(1, 0, 0, 53),
+    Position = UDim2.fromOffset(0, 0),
+    BackgroundColor3 = COLOR_ORANGE,
+    BorderSizePixel = 0
+})
+make("UICorner", header, {CornerRadius = UDim.new(0, 10)})
+make("UIGradient", header, {
+    Color = ColorSequence.new(
+        Color3.fromRGB(255, 107, 35),
+        Color3.fromRGB(255, 205, 93)
+    ),
+    Rotation = 0
+})
+make("TextLabel", header, {
+    Size = UDim2.new(1, -170, 1, 0),
+    Position = UDim2.fromOffset(12, 0),
+    BackgroundTransparency = 1,
+    Text = "CASTRO FINDER PRO",
+    Font = Enum.Font.GothamBold,
+    TextSize = 20,
+    TextColor3 = Color3.fromRGB(20, 21, 27),
+    TextXAlignment = Enum.TextXAlignment.Left
+})
+
+local function button(parent, label, x, y, width, height, callback)
+    local btn = make("TextButton", parent, {
+        Size = UDim2.fromOffset(width, height),
+        Position = UDim2.fromOffset(x, y),
+        BackgroundColor3 = COLOR_PANEL,
+        Text = label,
+        Font = Enum.Font.GothamBold,
+        TextSize = 13,
+        TextColor3 = COLOR_TEXT,
+        BorderSizePixel = 0
+    })
+    make("UICorner", btn, {CornerRadius = UDim.new(0, 6)})
+    btn.MouseButton1Click:Connect(callback)
+    return btn
+end
+
+local status = make("TextLabel", frame, {
+    Size = UDim2.new(1, -20, 0, 31),
+    Position = UDim2.fromOffset(10, 494),
+    BackgroundTransparency = 1,
+    Text = "Analisa somente a partida atual.",
+    Font = Enum.Font.Gotham,
+    TextWrapped = true,
+    TextSize = 12,
+    TextColor3 = COLOR_SUB,
+    TextXAlignment = Enum.TextXAlignment.Left
+})
+
+local list = make("ScrollingFrame", frame, {
+    Size = UDim2.new(1, -20, 0, 304),
+    Position = UDim2.fromOffset(10, 181),
+    BackgroundColor3 = COLOR_PANEL,
+    BorderSizePixel = 0,
+    CanvasSize = UDim2.fromOffset(0, 0),
+    ScrollBarThickness = 5,
+    AutomaticCanvasSize = Enum.AutomaticSize.Y
+})
+make("UICorner", list, {CornerRadius = UDim.new(0, 6)})
+make("UIListLayout", list, {
+    Padding = UDim.new(0, 4),
+    SortOrder = Enum.SortOrder.LayoutOrder
+})
+
+make("TextLabel", frame, {
+    Size = UDim2.new(1, -20, 0, 24),
+    Position = UDim2.fromOffset(10, 155),
+    BackgroundTransparency = 1,
+    Text = "CANDIDATOS · SERVIDOR ATUAL",
+    Font = Enum.Font.GothamBold,
+    TextSize = 13,
+    TextColor3 = COLOR_TEXT
+})
+make("TextLabel", frame, {
+    Size = UDim2.new(1, -116, 0, 26),
+    Position = UDim2.fromOffset(10, 530),
+    BackgroundColor3 = COLOR_PANEL,
+    Text = "Castro Finder · dados locais · sem conta externa",
+    Font = Enum.Font.Gotham,
+    TextSize = 11,
+    TextColor3 = COLOR_SUB
+})
+
+local alive = true
+local auto = false
+local selectedHighlight = nil
+local scanBusy = false
+local minValues = {0, 1000000000, 5000000000, 10000000000, 20000000000, 50000000000}
+local minLabels = {"0/s", "1B/s", "5B/s", "10B/s", "20B/s", "50B/s"}
+local minIndex = 1
+local rarities = {"Any", "Divine", "Eternal", "Secret", "Mythic", "Legendary", "Rare"}
+local rarityIndex = 1
+
+local function cleanHighlight()
+    if selectedHighlight then
+        selectedHighlight:Destroy()
+        selectedHighlight = nil
+    end
+end
+
+local function lower(value)
+    return string.lower(tostring(value or ""))
+end
+
+local function hasHint(value)
+    local text = lower(value)
+    return text:find("egg", 1, true)
+        or text:find("ovo", 1, true)
+        or text:find("hatch", 1, true)
+        or text:find("jellyfish", 1, true)
+        or text:find("shark", 1, true)
+        or text:find("centaur", 1, true)
+        or text:find("gargoyle", 1, true)
+        or text:find("gorillastein", 1, true)
+        or text:find("voidseer", 1, true)
+        or text:find("pumpkin", 1, true)
+end
+
+local multipliers = {k=1e3, m=1e6, b=1e9, t=1e12, qa=1e15, qi=1e18}
+
+local function readRate(source)
+    local text = lower(source)
+    local amount, suffix = text:match("%$%s*([%d.,]+)%s*(qi)%s*/s")
+    if not amount then amount, suffix = text:match("%$%s*([%d.,]+)%s*(qa)%s*/s") end
+    if not amount then amount, suffix = text:match("%$%s*([%d.,]+)%s*([kmbt])%s*/s") end
+    if not amount or not multipliers[suffix] then return nil end
+    local normalized = amount:gsub(",", ".")
+    local numeric = tonumber(normalized)
+    if not numeric then return nil end
+    return numeric * multipliers[suffix]
+end
+
+local function readRarity(source)
+    local text = lower(source)
+    for _, name in ipairs({"Divine", "Eternal", "Secret", "Mythic", "Legendary", "Rare"}) do
+        if text:find(lower(name), 1, true) then return name end
+    end
+    return nil
+end
+
+local function rateLabel(value)
+    if not value then return "Valor não identificado" end
+    if value >= 1e18 then return string.format("$%.2fQi/s", value / 1e18) end
+    if value >= 1e15 then return string.format("$%.2fQa/s", value / 1e15) end
+    if value >= 1e12 then return string.format("$%.2fT/s", value / 1e12) end
+    if value >= 1e9 then return string.format("$%.2fB/s", value / 1e9) end
+    if value >= 1e6 then return string.format("$%.2fM/s", value / 1e6) end
+    return string.format("$%.0f/s", value)
+end
+
+local function looksLikeValue(value)
+    local text = lower(value)
+    return text:find("/s", 1, true)
+        or text:find("moneypersecond", 1, true)
+        or text:find("cashpersecond", 1, true)
+        or text:find("income", 1, true)
+        or text:find("rarity", 1, true)
+end
+
+local function objectForHighlight(instance)
+    if instance:IsA("Model") or instance:IsA("BasePart") then
+        return instance
+    end
+    local model = instance:FindFirstAncestorOfClass("Model")
+    if model and model:IsDescendantOf(Workspace) then
+        return model
+    end
+    local part = instance:FindFirstAncestorWhichIsA("BasePart")
+    if part and part:IsDescendantOf(Workspace) then
+        return part
+    end
+    return nil
+end
+
+local function distanceTo(instance)
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return nil end
+    local success, pivot = pcall(function()
+        if instance:IsA("Model") then return instance:GetPivot().Position end
+        if instance:IsA("BasePart") then return instance.Position end
+    end)
+    if success and pivot then
+        return (root.Position - pivot).Magnitude
+    end
+    return nil
+end
+
+local function scan()
+    if scanBusy or not alive then return end
+    scanBusy = true
+    status.Text = "Varrendo objetos visiveis ao cliente..."
+
+    local candidates = {}
+    local checked = 0
+    local function record(instance, reason, weight, nameHint, numericValue)
+        local target = objectForHighlight(instance)
+        if not target or not target.Parent then return end
+        local candidate = candidates[target]
+        if not candidate then
+            candidate = {target = target, score = 0, descriptions = {},
+                         displayName = target.Name, rate = nil, rarity = nil}
+            candidates[target] = candidate
+        end
+        candidate.score = candidate.score + weight
+        if nameHint and #nameHint >= 3 and #nameHint <= 45 then
+            candidate.displayName = nameHint
+        end
+        local parsedRate = readRate(reason)
+        if parsedRate and (not candidate.rate or parsedRate > candidate.rate) then
+            candidate.rate = parsedRate
+        end
+        if type(numericValue) == "number" and numericValue > 0 then
+            candidate.rate = numericValue
+        end
+        candidate.rarity = readRarity(reason) or candidate.rarity
+        if #candidate.descriptions < 3 then
+            table.insert(candidate.descriptions, tostring(reason):sub(1, 75))
+        end
+    end
+
+    local descendants = Workspace:GetDescendants()
+    for _, inst in ipairs(descendants) do
+        checked = checked + 1
+        if checked > MAX_SCAN then break end
+        if (inst:IsA("Model") or inst:IsA("BasePart")) and hasHint(inst.Name) then
+            record(inst, "Nome: " .. inst.Name, 4)
+        end
+        if inst:IsA("ProximityPrompt") then
+            local text = tostring(inst.ObjectText) .. " " .. tostring(inst.ActionText)
+            if hasHint(text) then record(inst, "Interacao: " .. text, 6) end
+        elseif inst:IsA("TextLabel") or inst:IsA("TextButton") then
+            local text = tostring(inst.Text)
+            if hasHint(text) or looksLikeValue(text) then
+                record(inst, "Texto: " .. text, 3)
+            end
+        elseif inst:IsA("BillboardGui") then
+            local strings = {}
+            for _, label in ipairs(inst:GetDescendants()) do
+                if label:IsA("TextLabel") and #strings < 8 then
+                    table.insert(strings, tostring(label.Text))
+                end
+            end
+            local merged = table.concat(strings, " | ")
+            if hasHint(merged) or readRate(merged) then
+                local hint = nil
+                for _, line in ipairs(strings) do
+                    local clean = line:match("^%s*(.-)%s*$")
+                    if clean and #clean >= 3 and #clean <= 45
+                        and not clean:find("%$") and not readRarity(clean) then
+                        hint = clean
+                        break
+                    end
+                end
+                record(inst, "Etiqueta: " .. merged, 8, hint)
+            end
+        end
+        if inst:IsA("Model") or inst:IsA("BasePart") then
+            local attrs = inst:GetAttributes()
+            for key, value in pairs(attrs) do
+                if hasHint(key) or looksLikeValue(key)
+                    or (hasHint(value) and type(value) == "string") then
+                    local numeric = nil
+                    if type(value) == "number" and looksLikeValue(key) then
+                        numeric = value
+                    end
+                    record(inst, key .. "=" .. tostring(value), 2, nil, numeric)
+                end
+            end
+        end
+        if checked % 650 == 0 then task.wait() end
+    end
+
+    local results = {}
+    local totalCandidates = 0
+    for _, value in pairs(candidates) do
+        totalCandidates = totalCandidates + 1
+        value.distance = distanceTo(value.target)
+        local enough = minValues[minIndex] == 0
+            or (value.rate and value.rate >= minValues[minIndex])
+        local rarityOk = rarities[rarityIndex] == "Any"
+            or value.rarity == rarities[rarityIndex]
+        if enough and rarityOk then
+            table.insert(results, value)
+        end
+    end
+    table.sort(results, function(a, b)
+        if a.score ~= b.score then return a.score > b.score end
+        return (a.distance or math.huge) < (b.distance or math.huge)
+    end)
+
+    for _, child in ipairs(list:GetChildren()) do
+        if child.Name == "CastroResultRow" then child:Destroy() end
+    end
+    for index = 1, math.min(#results, MAX_RESULTS) do
+        local result = results[index]
+        local target = result.target
+        local distance = result.distance and string.format(" | %.0fm", result.distance) or ""
+        local display = result.displayName
+        local row = make("Frame", list, {
+            Name = "CastroResultRow",
+            Size = UDim2.new(1, -8, 0, 57),
+            BackgroundColor3 = Color3.fromRGB(43, 45, 53),
+            BorderSizePixel = 0,
+            LayoutOrder = index
+        })
+        make("UICorner", row, {CornerRadius = UDim.new(0, 5)})
+        make("TextLabel", row, {
+            Size = UDim2.new(1, -105, 0, 24),
+            Position = UDim2.fromOffset(8, 4),
+            BackgroundTransparency = 1,
+            Text = display,
+            Font = Enum.Font.GothamBold,
+            TextColor3 = COLOR_TEXT,
+            TextSize = 13,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd
+        })
+        make("TextLabel", row, {
+            Size = UDim2.new(1, -105, 0, 23),
+            Position = UDim2.fromOffset(8, 29),
+            BackgroundTransparency = 1,
+            Text = (result.rarity or "Raridade ?") .. "  " ..
+                rateLabel(result.rate) .. distance,
+            Font = Enum.Font.GothamBold,
+            TextColor3 = result.rate and COLOR_GREEN or COLOR_SUB,
+            TextSize = 11,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd
+        })
+        local mark = button(row, "MARCAR", 334, 9, 87, 38, function()
+            cleanHighlight()
+            if target and target.Parent then
+                local h = Instance.new("Highlight")
+                h.Name = "CastroFinderLocalHighlight"
+                h.Adornee = target
+                h.DepthMode = Enum.HighlightDepthMode.Occluded
+                h.FillColor = COLOR_ORANGE
+                h.OutlineColor = Color3.fromRGB(255, 255, 255)
+                h.FillTransparency = 0.65
+                h.Parent = Workspace
+                selectedHighlight = h
+                status.Text = "Candidato selecionado: " .. target.Name
+            end
+        end)
+        mark.BackgroundColor3 = COLOR_ORANGE
+        mark.TextColor3 = Color3.fromRGB(16, 19, 26)
+    end
+    status.Text = string.format(
+        "%d de %d candidatos; %d objetos lidos. Dados nao confirmados.",
+        #results, totalCandidates, math.min(checked, MAX_SCAN)
+    )
+    scanBusy = false
+end
+
+local scanButton = button(frame, "ATUALIZAR", 10, 65, 127, 47, scan)
+scanButton.BackgroundColor3 = Color3.fromRGB(84, 95, 117)
+
+local minButton
+minButton = button(frame, "MIN 0/s", 145, 65, 95, 47, function()
+    minIndex = (minIndex % #minValues) + 1
+    minButton.Text = "MIN " .. minLabels[minIndex]
+    scan()
+end)
+minButton.BackgroundColor3 = COLOR_BLUE
+
+local rarityButton
+rarityButton = button(frame, "RARITY Any", 248, 65, 105, 47, function()
+    rarityIndex = (rarityIndex % #rarities) + 1
+    rarityButton.Text = "RARITY " .. rarities[rarityIndex]
+    scan()
+end)
+rarityButton.BackgroundColor3 = COLOR_BLUE
+
+local modeButton = button(frame, "LOCAL", 361, 65, 84, 47, function()
+    status.Text = "Modo local: somente objetos replicados desta partida."
+end)
+modeButton.BackgroundColor3 = Color3.fromRGB(84, 95, 117)
+
+make("TextLabel", frame, {
+    Size = UDim2.new(1, -20, 0, 32),
+    Position = UDim2.fromOffset(10, 118),
+    BackgroundColor3 = COLOR_PANEL,
+    Text = "Sem login: leitura local, sem lista global de servidores",
+    Font = Enum.Font.Gotham,
+    TextSize = 12,
+    TextColor3 = COLOR_SUB
+})
+
+local autoButton
+autoButton = button(header, "SCAN OFF", 344, 9, 101, 35, function()
+    auto = not auto
+    autoButton.Text = auto and "SCAN ON" or "SCAN OFF"
+end)
+button(header, "CFG", 294, 9, 44, 35, function()
+    status.Text = "Configure MIN e RARITY tocando nos botoes azuis."
+end)
+button(frame, "FECHAR", 356, 531, 87, 25, function()
+    alive = false
+    cleanHighlight()
+    gui:Destroy()
+end)
+
+task.spawn(function()
+    scan()
+    while alive and gui.Parent do
+        task.wait(INTERVAL)
+        if auto then scan() end
+    end
+end)
